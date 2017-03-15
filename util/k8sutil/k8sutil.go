@@ -29,12 +29,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"time"
 
 	"github.com/Sirupsen/logrus"
 	myspec "github.com/upmc-enterprises/elasticsearch-operator/pkg/spec"
+	"github.com/upmc-enterprises/elasticsearch-operator/util/k8sutil"
 	"k8s.io/client-go/kubernetes"
 	appsType "k8s.io/client-go/kubernetes/typed/apps/v1beta1"
 	coreType "k8s.io/client-go/kubernetes/typed/core/v1"
@@ -86,6 +88,7 @@ type KubeInterface interface {
 type K8sutil struct {
 	Kclient    KubeInterface
 	MasterHost string
+	K8sHTTPCli *http.Client
 }
 
 // ThirdPartyResource in Kubernetes
@@ -120,12 +123,49 @@ func New(kubeCfgFile, masterHost string) (*K8sutil, error) {
 		logrus.Fatalf("Could not init Kubernetes client! [%s]", err)
 	}
 
+	restcli, err := k8sutil.NewTPRClient()
+	if err != nil {
+		panic(err)
+	}
+
 	k := &K8sutil{
 		Kclient:    client,
 		MasterHost: masterHost,
+		K8sHTTPCli: restcli.Client,
 	}
 
 	return k, nil
+}
+
+// InClusterConfig gets rest api reference to kube api
+func InClusterConfig() (*rest.Config, error) {
+	// Work around https://github.com/kubernetes/kubernetes/issues/40973
+	// See https://github.com/coreos/etcd-operator/issues/731#issuecomment-283804819
+	if len(os.Getenv("KUBERNETES_SERVICE_HOST")) == 0 {
+		addrs, err := net.LookupHost("kubernetes.default.svc")
+		if err != nil {
+			panic(err)
+		}
+		os.Setenv("KUBERNETES_SERVICE_HOST", addrs[0])
+	}
+	if len(os.Getenv("KUBERNETES_SERVICE_PORT")) == 0 {
+		os.Setenv("KUBERNETES_SERVICE_PORT", "443")
+	}
+	return rest.InClusterConfig()
+}
+
+// NewTPRClient gets a rest client to talk to third party resources
+func NewTPRClient() (*rest.RESTClient, error) {
+	config, err := InClusterConfig()
+	if err != nil {
+		return nil, err
+	}
+
+	restcli, err := rest.RESTClientFor(config)
+	if err != nil {
+		return nil, err
+	}
+	return restcli, nil
 }
 
 func newKubeClient(kubeCfgFile string) (KubeInterface, error) {
@@ -170,12 +210,13 @@ func (k *K8sutil) GetElasticSearchClusters() ([]myspec.ElasticSearchCluster, err
 	var resp *http.Response
 	var err error
 	for {
-		// TODO: Ignore TLS certs..bad bad bad...
-		tr := &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-		}
-		client := &http.Client{Transport: tr}
-		resp, err = client.Get(k.MasterHost + elasticSearchEndpoint)
+		// // TODO: Ignore TLS certs..bad bad bad...
+		// tr := &http.Transport{
+		// 	TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		// }
+		// client := &http.Client{Transport: tr}
+
+		resp, err = k.K8sHTTPCli.Get(k.MasterHost + elasticSearchEndpoint)
 		if err != nil {
 			logrus.Error(err)
 			time.Sleep(5 * time.Second)
