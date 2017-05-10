@@ -424,6 +424,7 @@ func (k *K8sutil) CreateClientService() error {
 						Protocol: "TCP",
 					},
 				},
+				Type: v1.ServiceTypeNodePort,
 			},
 		}
 
