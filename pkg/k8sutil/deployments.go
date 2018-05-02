@@ -31,6 +31,7 @@ import (
 	myspec "github.com/upmc-enterprises/elasticsearch-operator/pkg/apis/elasticsearchoperator/v1"
 	"k8s.io/api/apps/v1beta1"
 	"k8s.io/api/core/v1"
+	ext_v1beta1 "k8s.io/api/extensions/v1beta1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -109,18 +110,19 @@ func (k *K8sutil) CreateClientDeployment(baseImage string, replicas *int32, java
 	deployment, err := k.Kclient.ExtensionsV1beta1().Deployments(namespace).Get(deploymentName, metav1.GetOptions{})
 
 	enableSSL := "false"
-	if useSSL != nil && *useSSL {
+	if useSSL != nil && *useSSL == true {
 		enableSSL = "true"
 	}
+
+	// Parse CPU / Memory
+	limitCPU, _ := resource.ParseQuantity(resources.Limits.CPU)
+	limitMemory, _ := resource.ParseQuantity(resources.Limits.Memory)
+	requestCPU, _ := resource.ParseQuantity(resources.Requests.CPU)
+	requestMemory, _ := resource.ParseQuantity(resources.Requests.Memory)
 
 	if len(deployment.Name) == 0 {
 		logrus.Infof("Deployment %s not found, creating...", deploymentName)
 
-		// Parse CPU / Memory
-		limitCPU, _ := resource.ParseQuantity(resources.Limits.CPU)
-		limitMemory, _ := resource.ParseQuantity(resources.Limits.Memory)
-		requestCPU, _ := resource.ParseQuantity(resources.Requests.CPU)
-		requestMemory, _ := resource.ParseQuantity(resources.Requests.Memory)
 		scheme := v1.URISchemeHTTP
 		if useSSL != nil && *useSSL {
 			scheme = v1.URISchemeHTTPS
@@ -304,8 +306,44 @@ func (k *K8sutil) CreateClientDeployment(baseImage string, replicas *int32, java
 				return err
 			}
 		}
+
+		k.updateDeploymentResources(namespace, deploymentName, deployment, limitCPU, limitMemory, requestCPU, requestMemory)
 	}
 
+	return nil
+}
+
+func (k *K8sutil) updateDeploymentResources(namespace string, deploymentName string, deployment *ext_v1beta1.Deployment, limitCPU resource.Quantity, limitMemory resource.Quantity, requestCPU resource.Quantity, requestMemory resource.Quantity) error {
+
+	for _, container := range deployment.Spec.Template.Spec.Containers {
+		// Parse CPU / Memory
+		currentLimitCPU := container.Resources.Limits["cpu"]
+		currentLimitMemory := container.Resources.Limits["memory"]
+		currentRequestCPU, _ := container.Resources.Requests["cpu"]
+		currentRequestMemory, _ := container.Resources.Requests["memory"]
+		if currentLimitCPU != limitCPU ||
+			currentLimitMemory != limitMemory ||
+			currentRequestCPU != requestCPU ||
+			currentRequestMemory != requestMemory {
+
+			container.Resources = v1.ResourceRequirements{
+				Limits: v1.ResourceList{
+					"cpu":    limitCPU,
+					"memory": limitMemory,
+				},
+				Requests: v1.ResourceList{
+					"cpu":    requestCPU,
+					"memory": requestMemory,
+				}}
+
+			logrus.Infof("Deployment %s resources requests or limits changed, updating...", deploymentName)
+
+			if _, err := k.Kclient.ExtensionsV1beta1().Deployments(namespace).Update(deployment); err != nil {
+				logrus.Error("Could not update deployment: ", err)
+				return err
+			}
+		}
+	}
 	return nil
 }
 

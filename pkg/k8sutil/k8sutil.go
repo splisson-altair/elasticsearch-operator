@@ -643,8 +643,56 @@ func (k *K8sutil) CreateDataNodeDeployment(deploymentType string, replicas *int3
 				return err
 			}
 		}
+
+		// Update resources ?
+		// Parse CPU / Memory
+		limitCPU, _ := resource.ParseQuantity(resources.Limits.CPU)
+		limitMemory, _ := resource.ParseQuantity(resources.Limits.Memory)
+		requestCPU, _ := resource.ParseQuantity(resources.Requests.CPU)
+		requestMemory, _ := resource.ParseQuantity(resources.Requests.Memory)
+
+		k.updateStatefulSetResources(namespace, statefulSetName, statefulSet, limitCPU, limitMemory, requestCPU, requestMemory)
+
 	}
 
+	return nil
+}
+
+func (k *K8sutil) updateStatefulSetResources(namespace string, statefulSetName string, statefulSet *apps.StatefulSet, limitCPU resource.Quantity, limitMemory resource.Quantity, requestCPU resource.Quantity, requestMemory resource.Quantity) error {
+
+	for _, container := range statefulSet.Spec.Template.Spec.Containers {
+		// Parse CPU / Memory
+		currentLimitCPU := container.Resources.Limits["cpu"]
+		currentLimitMemory := container.Resources.Limits["memory"]
+		currentRequestCPU, _ := container.Resources.Requests["cpu"]
+		currentRequestMemory, _ := container.Resources.Requests["memory"]
+		logrus.Infof("limit cpu %v limit memory %v", currentLimitCPU, currentLimitMemory)
+
+		if currentLimitCPU != limitCPU ||
+			currentLimitMemory != limitMemory ||
+			currentRequestCPU != requestCPU ||
+			currentRequestMemory != requestMemory {
+
+			container.Resources = v1.ResourceRequirements{
+				Limits: v1.ResourceList{
+					"cpu":    limitCPU,
+					"memory": limitMemory,
+				},
+				Requests: v1.ResourceList{
+					"cpu":    requestCPU,
+					"memory": requestMemory,
+				}}
+
+			logrus.Infof("StatefulSet %s resources requests or limits changed, updating...", statefulSetName)
+
+			_, err := k.Kclient.AppsV1beta2().StatefulSets(namespace).Update(statefulSet)
+
+			if err != nil {
+				logrus.Error("Could not update statefulSet: ", err)
+				return err
+			}
+		}
+	}
 	return nil
 }
 
