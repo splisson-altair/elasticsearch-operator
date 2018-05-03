@@ -401,14 +401,20 @@ func (k *K8sutil) CreateDataNodeDeployment(deploymentType string, replicas *int3
 	// Check if StatefulSet exists
 	statefulSet, err := k.Kclient.AppsV1beta2().StatefulSets(namespace).Get(statefulSetName, metav1.GetOptions{})
 
+	// Parse CPU / Memory
+	limitCPU, _ := resource.ParseQuantity(resources.Limits.CPU)
+	limitMemory, _ := resource.ParseQuantity(resources.Limits.Memory)
+	requestCPU, _ := resource.ParseQuantity(resources.Requests.CPU)
+	requestMemory, _ := resource.ParseQuantity(resources.Requests.Memory)
+
 	if len(statefulSet.Name) == 0 {
 		volumeSize, _ := resource.ParseQuantity(dataDiskSize)
 
 		// Parse CPU / Memory
 		// limitCPU, _ := resource.ParseQuantity(resources.Limits.CPU)
 		// limitMemory, _ := resource.ParseQuantity(resources.Limits.Memory)
-		requestCPU, _ := resource.ParseQuantity(resources.Requests.CPU)
-		requestMemory, _ := resource.ParseQuantity(resources.Requests.Memory)
+		// requestCPU, _ := resource.ParseQuantity(resources.Requests.CPU)
+		// requestMemory, _ := resource.ParseQuantity(resources.Requests.Memory)
 
 		logrus.Infof("StatefulSet %s not found, creating...", statefulSetName)
 		scheme := v1.URISchemeHTTP
@@ -632,35 +638,37 @@ func (k *K8sutil) CreateDataNodeDeployment(deploymentType string, replicas *int3
 			return err
 		}
 
+		updateNeeded := false
+
 		//scale replicas?
 		if statefulSet.Spec.Replicas != replicas {
 			statefulSet.Spec.Replicas = replicas
+			updateNeeded = true
+		}
 
+		resourceUpdateNeeded, err := k.updateStatefulSetResources(namespace, statefulSetName, statefulSet, limitCPU, limitMemory, requestCPU, requestMemory)
+		if err != nil {
+			logrus.Error("Could not update statefulSet reources: ", err)
+			return err
+		}
+		updateNeeded = updateNeeded || resourceUpdateNeeded
+
+		if updateNeeded {
 			_, err := k.Kclient.AppsV1beta2().StatefulSets(namespace).Update(statefulSet)
 
 			if err != nil {
-				logrus.Error("Could not scale statefulSet: ", err)
+				logrus.Error("Could not update statefulSet: ", err)
 				return err
 			}
 		}
-
-		// Update resources ?
-		// Parse CPU / Memory
-		limitCPU, _ := resource.ParseQuantity(resources.Limits.CPU)
-		limitMemory, _ := resource.ParseQuantity(resources.Limits.Memory)
-		requestCPU, _ := resource.ParseQuantity(resources.Requests.CPU)
-		requestMemory, _ := resource.ParseQuantity(resources.Requests.Memory)
-
-		k.updateStatefulSetResources(namespace, statefulSetName, statefulSet, limitCPU, limitMemory, requestCPU, requestMemory)
-
 	}
 
 	return nil
 }
 
-func (k *K8sutil) updateStatefulSetResources(namespace string, statefulSetName string, statefulSet *apps.StatefulSet, limitCPU resource.Quantity, limitMemory resource.Quantity, requestCPU resource.Quantity, requestMemory resource.Quantity) error {
-
-	for _, container := range statefulSet.Spec.Template.Spec.Containers {
+func (k *K8sutil) updateStatefulSetResources(namespace string, statefulSetName string, statefulSet *apps.StatefulSet, limitCPU resource.Quantity, limitMemory resource.Quantity, requestCPU resource.Quantity, requestMemory resource.Quantity) (bool, error) {
+	updateNeeded := false
+	for index, container := range statefulSet.Spec.Template.Spec.Containers {
 		// Parse CPU / Memory
 		currentLimitCPU := container.Resources.Limits["cpu"]
 		currentLimitMemory := container.Resources.Limits["memory"]
@@ -673,6 +681,9 @@ func (k *K8sutil) updateStatefulSetResources(namespace string, statefulSetName s
 			currentRequestCPU != requestCPU ||
 			currentRequestMemory != requestMemory {
 
+			updateNeeded = true
+			logrus.Infof("StatefulSet %s resources requests or limits changed", statefulSetName)
+
 			container.Resources = v1.ResourceRequirements{
 				Limits: v1.ResourceList{
 					"cpu":    limitCPU,
@@ -681,19 +692,13 @@ func (k *K8sutil) updateStatefulSetResources(namespace string, statefulSetName s
 				Requests: v1.ResourceList{
 					"cpu":    requestCPU,
 					"memory": requestMemory,
-				}}
-
-			logrus.Infof("StatefulSet %s resources requests or limits changed, updating...", statefulSetName)
-
-			_, err := k.Kclient.AppsV1beta2().StatefulSets(namespace).Update(statefulSet)
-
-			if err != nil {
-				logrus.Error("Could not update statefulSet: ", err)
-				return err
+				},
 			}
+			statefulSet.Spec.Template.Spec.Containers[index] = container
 		}
+
 	}
-	return nil
+	return updateNeeded, nil
 }
 
 // CreateCerebroConfiguration creates Cerebro configuration
