@@ -395,8 +395,8 @@ func buildStatefulSet(statefulSetName, clusterName, deploymentType, baseImage, s
 	volumeSize, _ := resource.ParseQuantity(dataDiskSize)
 
 	// Parse CPU / Memory
-	limitCPU, _ := resource.ParseQuantity(resources.Limits.CPU)
-	limitMemory, _ := resource.ParseQuantity(resources.Limits.Memory)
+	// limitCPU, _ := resource.ParseQuantity(resources.Limits.CPU)
+	// limitMemory, _ := resource.ParseQuantity(resources.Limits.Memory)
 	requestCPU, _ := resource.ParseQuantity(resources.Requests.CPU)
 	requestMemory, _ := resource.ParseQuantity(resources.Requests.Memory)
 
@@ -664,9 +664,15 @@ func (k *K8sutil) CreateDataNodeDeployment(deploymentType string, replicas *int3
 			updateNeeded = true
 		}
 
+		// Parse CPU / Memory
+		limitCPU, _ := resource.ParseQuantity(resources.Limits.CPU)
+		limitMemory, _ := resource.ParseQuantity(resources.Limits.Memory)
+		requestCPU, _ := resource.ParseQuantity(resources.Requests.CPU)
+		requestMemory, _ := resource.ParseQuantity(resources.Requests.Memory)
+
 		resourceUpdateNeeded, err := k.updateStatefulSetResources(namespace, statefulSetName, statefulSet, limitCPU, limitMemory, requestCPU, requestMemory)
 		if err != nil {
-			logrus.Error("Could not update statefulSet reources: ", err)
+			logrus.Error("Could not update statefulSet resources: ", err)
 			return err
 		}
 		updateNeeded = updateNeeded || resourceUpdateNeeded
@@ -690,14 +696,18 @@ func (k *K8sutil) updateStatefulSetResources(namespace string, statefulSetName s
 		// Parse CPU / Memory
 		currentLimitCPU := container.Resources.Limits["cpu"]
 		currentLimitMemory := container.Resources.Limits["memory"]
-		currentRequestCPU, _ := container.Resources.Requests["cpu"]
-		currentRequestMemory, _ := container.Resources.Requests["memory"]
-		logrus.Infof("limit cpu %v limit memory %v", currentLimitCPU, currentLimitMemory)
+		currentRequestCPU := container.Resources.Requests["cpu"]
+		currentRequestMemory := container.Resources.Requests["memory"]
 
-		if currentLimitCPU != limitCPU ||
-			currentLimitMemory != limitMemory ||
-			currentRequestCPU != requestCPU ||
-			currentRequestMemory != requestMemory {
+		if currentLimitCPU.Cmp(limitCPU) != 0 ||
+			currentLimitMemory.Cmp(limitMemory) != 0 ||
+			currentRequestCPU.Cmp(requestCPU) != 0 ||
+			currentRequestMemory.Cmp(requestMemory) != 0 {
+
+			logrus.Infof("Current request cpu %v - memory %v", currentRequestCPU.ToDec(), currentRequestMemory.ToDec())
+			logrus.Infof("New request cpu %v - memory %v", requestCPU.ToDec(), requestMemory.ToDec())
+			logrus.Infof("Current limits cpu %v - memory %v", currentLimitCPU.ToDec(), currentLimitMemory.ToDec())
+			logrus.Infof("New limits cpu %v - memory %v", limitCPU.ToDec(), limitMemory.ToDec())
 
 			updateNeeded = true
 			logrus.Infof("StatefulSet %s resources requests or limits changed", statefulSetName)
