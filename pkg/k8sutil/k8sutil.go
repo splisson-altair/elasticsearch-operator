@@ -420,15 +420,6 @@ func buildStatefulSet(statefulSetName, clusterName, deploymentType, baseImage, s
 		},
 	}
 
-	if len(statefulSet.Name) == 0 {
-		volumeSize, _ := resource.ParseQuantity(dataDiskSize)
-
-		// Parse CPU / Memory
-		// limitCPU, _ := resource.ParseQuantity(resources.Limits.CPU)
-		// limitMemory, _ := resource.ParseQuantity(resources.Limits.Memory)
-		// requestCPU, _ := resource.ParseQuantity(resources.Requests.CPU)
-		// requestMemory, _ := resource.ParseQuantity(resources.Requests.Memory)
-
 	component := fmt.Sprintf("elasticsearch-%s", clusterName)
 	discoveryServiceNameCluster := fmt.Sprintf("%s-%s", discoveryServiceName, clusterName)
 
