@@ -122,6 +122,7 @@ func (k *K8sutil) CreateClientDeployment(baseImage string, replicas *int32, java
 
 	if len(deployment.Name) == 0 {
 		logrus.Infof("Deployment %s not found, creating...", deploymentName)
+		clusterSecretName := fmt.Sprintf("%s-%s", secretName, clusterName)
 
 		scheme := v1.URISchemeHTTP
 		if useSSL != nil && *useSSL {
@@ -247,7 +248,7 @@ func (k *K8sutil) CreateClientDeployment(baseImage string, replicas *int32, java
 										MountPath: "/data",
 									},
 									v1.VolumeMount{
-										Name:      fmt.Sprintf("%s-%s", secretName, clusterName),
+										Name:      clusterSecretName,
 										MountPath: elasticsearchCertspath,
 									},
 								},
@@ -271,10 +272,10 @@ func (k *K8sutil) CreateClientDeployment(baseImage string, replicas *int32, java
 								},
 							},
 							v1.Volume{
-								Name: fmt.Sprintf("%s-%s", secretName, clusterName),
+								Name: clusterSecretName,
 								VolumeSource: v1.VolumeSource{
 									Secret: &v1.SecretVolumeSource{
-										SecretName: fmt.Sprintf("%s-%s", secretName, clusterName),
+										SecretName: clusterSecretName,
 									},
 								},
 							},
@@ -283,6 +284,35 @@ func (k *K8sutil) CreateClientDeployment(baseImage string, replicas *int32, java
 					},
 				},
 			},
+		}
+
+		if useSSL != nil && !*useSSL {
+			// Do not configure Volume and VolumeMount for certs
+			volumeMounts := deployment.Spec.Template.Spec.Containers[0].VolumeMounts
+			for index, volumeMount := range volumeMounts {
+				if volumeMount.Name == clusterSecretName {
+					if index < (len(volumeMounts) - 1) {
+						volumeMounts = append(volumeMounts[:index], volumeMounts[index+1:]...)
+					} else {
+						volumeMounts = volumeMounts[:index]
+					}
+					break
+				}
+			}
+			deployment.Spec.Template.Spec.Containers[0].VolumeMounts = volumeMounts
+
+			volumes := deployment.Spec.Template.Spec.Volumes
+			for index, volume := range volumes {
+				if volume.Name == clusterSecretName {
+					if index < (len(volumes) - 1) {
+						volumes = append(volumes[:index], volumes[index+1:]...)
+					} else {
+						volumes = volumes[:index]
+					}
+					break
+				}
+			}
+			deployment.Spec.Template.Spec.Volumes = volumes
 		}
 
 		_, err := k.Kclient.AppsV1beta1().Deployments(namespace).Create(deployment)
